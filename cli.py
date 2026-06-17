@@ -44,13 +44,14 @@ def validator(ch):
     return ch
 
 def renderHorizontalLine(stdscr, y):
-    lineString = ""
-    for i in range(curses.COLS):
-        lineString += "─"
+    lineString = "─" * curses.COLS
     stdscr.addstr(y, 0, lineString)
 
 def stringLineCount(string):
     return max(1, math.ceil(len(string) / curses.COLS))
+
+def lineNumberPadding(lineNumber, lineCount):
+    return " " * (len(str(lineCount - 1)) - len(str(lineNumber)))
 
 def main(stdscr, fileNames, userPrompt, prompt):
 
@@ -147,7 +148,7 @@ def main(stdscr, fileNames, userPrompt, prompt):
             stdscr.addstr(1, 0, "context size: " + str(tokensPredicted+tokensEvaluated))
             renderHorizontalLine(stdscr, 2)
 
-            renderAreaHeight = windowHeight - headerHeight
+            renderAreaHeight = windowHeight - headerHeight - 1
             lineCount = len(outputLines)
 
             scrollState = min(scrollState, lineCount)
@@ -160,7 +161,7 @@ def main(stdscr, fileNames, userPrompt, prompt):
                     messageWindow.standout()
                 if scrollState <= i <= scrollState + renderAreaHeight:
                     readLine = outputLines[i]
-                    messageWindow.addstr(y, 0, str(i) + " " + readLine)
+                    messageWindow.addstr(y, 0, str(i) + lineNumberPadding(i, lineCount) + " " + readLine)
                     y += stringLineCount(readLine)
 
             messageWindow.refresh()
