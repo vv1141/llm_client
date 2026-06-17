@@ -1,5 +1,6 @@
 import curses
 from curses.textpad import Textbox
+from enum import Enum
 import sys
 import math
 import glob
@@ -15,6 +16,12 @@ workingDirectory = "."
 
 url = "http://localhost:8080/completion"
 headers = {"Content-Type": "application/json"}
+
+class Colour(Enum):
+    WHITE = 1
+    GREY = 2
+    GREEN = 3
+    HIGHLIGHT = 4
 
 def stream_post(q, stop_event, payload):
     try:
@@ -45,7 +52,7 @@ def validator(ch):
 
 def renderHorizontalLine(stdscr, y):
     lineString = "─" * curses.COLS
-    stdscr.addstr(y, 0, lineString)
+    stdscr.addstr(y, 0, lineString, curses.color_pair(Colour.WHITE.value))
 
 def stringLineCount(string):
     return max(1, math.ceil(len(string) / curses.COLS))
@@ -66,13 +73,21 @@ def main(stdscr, fileNames, userPrompt, prompt):
     stdscr = curses.initscr()
     stdscr.clear()
     windowHeight, windowWidth = curses.LINES, curses.COLS
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(Colour.WHITE.value, 7, -1)
+    curses.init_pair(Colour.GREY.value, 244, -1)
+    curses.init_pair(Colour.GREEN.value, 2, -1)
+    curses.init_pair(Colour.HIGHLIGHT.value, 0, 2)
 
     outputLines = []
     userPromptLines = userPrompt.split("\n")
     for line in userPromptLines:
         outputLines.append(line)
+    modelStartLine = len(outputLines)
     outputLines.append("")
     outputLines.append("")
+    modelThinkEndLine = -1
 
     try:
         messageWindowWidth = windowWidth
@@ -109,6 +124,7 @@ def main(stdscr, fileNames, userPrompt, prompt):
                             outputLines.append("")
                         tokensPredicted = data["tokens_predicted"]
                         tokensEvaluated = data["tokens_evaluated"]
+
                         rerender = True
                     except Exception:
                         pass
@@ -144,8 +160,8 @@ def main(stdscr, fileNames, userPrompt, prompt):
             except curses.error:
                 pass
 
-            stdscr.addstr(0, 0, "project context: " + str(fileNames))
-            stdscr.addstr(1, 0, "context size: " + str(tokensPredicted+tokensEvaluated))
+            stdscr.addstr(0, 0, "project context: " + str(fileNames), curses.color_pair(Colour.WHITE.value))
+            stdscr.addstr(1, 0, "context size: " + str(tokensPredicted+tokensEvaluated), curses.color_pair(Colour.WHITE.value))
             renderHorizontalLine(stdscr, 2)
 
             renderAreaHeight = windowHeight - headerHeight - 1
@@ -156,12 +172,18 @@ def main(stdscr, fileNames, userPrompt, prompt):
 
             y = 0
             for i in range(lineCount):
-                messageWindow.standend()
-                if i == cursorPosition:
-                    messageWindow.standout()
+                if modelThinkEndLine == -1 and "</think>" in outputLines[i]:
+                    modelThinkEndLine = i
                 if scrollState <= i <= scrollState + renderAreaHeight:
                     readLine = outputLines[i]
-                    messageWindow.addstr(y, 0, str(i) + lineNumberPadding(i, lineCount) + " " + readLine)
+                    colour = Colour.GREEN.value
+                    if i >= modelStartLine:
+                        colour = Colour.GREY.value
+                    if modelThinkEndLine != -1 and i > modelThinkEndLine:
+                        colour = Colour.WHITE.value
+                    if i == cursorPosition:
+                        colour = Colour.HIGHLIGHT.value
+                    messageWindow.addstr(y, 0, str(i) + lineNumberPadding(i, lineCount) + " " + readLine, curses.color_pair(colour))
                     y += stringLineCount(readLine)
 
             messageWindow.refresh()
