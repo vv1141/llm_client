@@ -50,9 +50,15 @@ def validator(ch):
         return curses.ascii.BEL
     return ch
 
-def renderHorizontalLine(stdscr, y):
+def addStr(target, y, string, colour, coloursEnabled):
+    if coloursEnabled:
+        target.addstr(y, 0, string, curses.color_pair(colour))
+    else:
+        target.addstr(y, 0, string)
+
+def renderHorizontalLine(target, y, coloursEnabled):
     lineString = "─" * curses.COLS
-    stdscr.addstr(y, 0, lineString, curses.color_pair(Colour.WHITE.value))
+    addStr(target, y, lineString, Colour.WHITE.value, coloursEnabled)
 
 def stringLineCount(string):
     return max(1, math.ceil(len(string) / curses.COLS))
@@ -62,6 +68,7 @@ def lineNumberPadding(lineNumber, lineCount):
 
 def main(stdscr, fileNames, userPrompt, prompt):
 
+    coloursEnabled = False
     scrollSpeed = 5
     headerHeight = 3
 
@@ -73,12 +80,15 @@ def main(stdscr, fileNames, userPrompt, prompt):
     stdscr = curses.initscr()
     stdscr.clear()
     windowHeight, windowWidth = curses.LINES, curses.COLS
-    curses.start_color()
-    curses.use_default_colors()
-    curses.init_pair(Colour.WHITE.value, 7, -1)
-    curses.init_pair(Colour.GREY.value, 244, -1)
-    curses.init_pair(Colour.GREEN.value, 2, -1)
-    curses.init_pair(Colour.HIGHLIGHT.value, 0, 2)
+
+    if curses.has_colors() and curses.COLORS >= 244:
+        coloursEnabled = True
+        curses.start_color()
+        curses.use_default_colors()
+        curses.init_pair(Colour.WHITE.value, 7, -1)
+        curses.init_pair(Colour.GREY.value, 244, -1)
+        curses.init_pair(Colour.GREEN.value, 2, -1)
+        curses.init_pair(Colour.HIGHLIGHT.value, 0, 2)
 
     outputLines = []
     userPromptLines = userPrompt.split("\n")
@@ -144,7 +154,7 @@ def main(stdscr, fileNames, userPrompt, prompt):
                         scrollState +=scrollSpeed
                         rerender = True
                 elif ch != -1 and 0 <= ch <= 255:
-                    stdscr.addstr(0, 0, "context: " + str(ch))
+                    addStr(stdscr, 0, "context: " + str(ch), Colour.WHITE.value, coloursEnabled)
                     if ch == curses.KEY_NPAGE:
                         scrollState -=scrollSpeed
                         rerender = True
@@ -160,9 +170,9 @@ def main(stdscr, fileNames, userPrompt, prompt):
             except curses.error:
                 pass
 
-            stdscr.addstr(0, 0, "project context: " + str(fileNames), curses.color_pair(Colour.WHITE.value))
-            stdscr.addstr(1, 0, "context size: " + str(tokensPredicted+tokensEvaluated), curses.color_pair(Colour.WHITE.value))
-            renderHorizontalLine(stdscr, 2)
+            addStr(stdscr, 0, "project context: " + str(fileNames), Colour.WHITE.value, coloursEnabled)
+            addStr(stdscr, 1, "context size: " + str(tokensPredicted+tokensEvaluated), Colour.WHITE.value, coloursEnabled)
+            renderHorizontalLine(stdscr, 2, coloursEnabled)
 
             renderAreaHeight = windowHeight - headerHeight - 1
             lineCount = len(outputLines)
@@ -183,7 +193,7 @@ def main(stdscr, fileNames, userPrompt, prompt):
                         colour = Colour.WHITE.value
                     if i == cursorPosition:
                         colour = Colour.HIGHLIGHT.value
-                    messageWindow.addstr(y, 0, str(i) + lineNumberPadding(i, lineCount) + " " + readLine, curses.color_pair(colour))
+                    addStr(messageWindow, y, str(i) + lineNumberPadding(i, lineCount) + " " + readLine, colour, coloursEnabled)
                     y += stringLineCount(readLine)
 
             messageWindow.refresh()
