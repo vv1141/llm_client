@@ -14,7 +14,9 @@ rootPath = "data"
 promptTemplateFilePath = rootPath + "/prompt_template"
 workingDirectory = "."
 
-url = "http://localhost:8080/completion"
+baseUrl = "http://localhost:8080"
+completionUrl = baseUrl + "/completion"
+healthUrl = baseUrl + "/health"
 headers = {"Content-Type": "application/json"}
 
 class Colour(Enum):
@@ -23,11 +25,22 @@ class Colour(Enum):
     GREEN = 3
     HIGHLIGHT = 4
 
-def stream_post(q, stop_event, payload):
+def checkServerStatus():
     try:
-        with requests.post(url, headers=headers, json=payload, stream=True) as r:
-            r.raise_for_status()
-            for line in r.iter_lines(decode_unicode=True):
+        with requests.get(healthUrl, headers=headers) as response:
+            response.raise_for_status()
+            try:
+                return response.json()
+            except json.JSONDecodeError:
+                pass
+    except Exception as e:
+        pass
+
+def streamPost(q, stop_event, payload):
+    try:
+        with requests.post(completionUrl, headers=headers, json=payload, stream=True) as response:
+            response.raise_for_status()
+            for line in response.iter_lines(decode_unicode=True):
                 if stop_event.is_set():
                     break
                 if not line:
@@ -118,7 +131,7 @@ def main(stdscr, fileNames, userPrompt, prompt):
         payload = {"prompt": prompt, "stream": True}
         q = queue.Queue()
         stop_event = threading.Event()
-        t = threading.Thread(target=stream_post, args=(q, stop_event, payload), daemon=True)
+        t = threading.Thread(target=streamPost, args=(q, stop_event, payload), daemon=True)
         t.start()
 
         while(True):
@@ -206,6 +219,9 @@ def main(stdscr, fileNames, userPrompt, prompt):
     except KeyboardInterrupt:
         t.join(timeout=0)
         sys.exit(0)
+
+serverStatus = str(checkServerStatus())
+print(serverStatus)
 
 with open(promptTemplateFilePath, "r") as file:
     promptTemplate = file.read()
