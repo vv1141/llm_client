@@ -2,6 +2,7 @@ import curses
 from curses.textpad import Textbox
 from enum import Enum
 import sys
+import os
 import math
 import glob
 import requests
@@ -63,6 +64,12 @@ def validator(ch):
         return curses.ascii.BEL
     return ch
 
+def formatList(value):
+    string = ""
+    for i in value:
+        string += str(i) + " "
+    return string
+
 def addStr(target, y, string, colour, coloursEnabled):
     if coloursEnabled:
         target.addstr(y, 0, string, curses.color_pair(colour))
@@ -79,7 +86,7 @@ def stringLineCount(string):
 def lineNumberPadding(lineNumber, lineCount):
     return " " * (len(str(lineCount - 1)) - len(str(lineNumber)))
 
-def main(stdscr, fileNames, userPrompt, prompt):
+def main(stdscr, serverStatus):
 
     coloursEnabled = False
     scrollSpeed = 5
@@ -89,6 +96,7 @@ def main(stdscr, fileNames, userPrompt, prompt):
     cursorPosition = 0
     tokensPredicted = 0
     tokensEvaluated = 0
+    modelThinkEndLine = -1
 
     stdscr = curses.initscr()
     stdscr.clear()
@@ -104,13 +112,68 @@ def main(stdscr, fileNames, userPrompt, prompt):
         curses.init_pair(Colour.HIGHLIGHT.value, 0, 2)
 
     outputLines = []
+
+    addStr(stdscr, 0, "Server: " + serverStatus, Colour.WHITE.value, coloursEnabled)
+    addStr(stdscr, 1, "Files: ", Colour.WHITE.value, coloursEnabled)
+    editWindowWidth = min(100, windowWidth)
+    editWindowHeight = min(100, windowHeight)
+    editWindow = curses.newwin(editWindowHeight-2, editWindowWidth-2, 3, 0)
+    editWindow.refresh()
+    stdscr.refresh()
+    box = Textbox(editWindow)
+    box.edit(validator)
+    patterns = box.gather()
+    patterns = patterns.split(" ")
+    fileNames = []
+    if patterns != [""]:
+        for pattern in patterns:
+            pattern = pattern.strip()
+            if pattern != "":
+                globbedNames = glob.glob(workingDirectory + "/" + pattern)
+                for name in globbedNames:
+                    if not os.path.isdir(name):
+                        fileNames.append(name)
+
+    stdscr.erase()
+    addStr(stdscr, 0, "Server: " + serverStatus, Colour.WHITE.value, coloursEnabled)
+    addStr(stdscr, 1, "Files: " + formatList(fileNames), Colour.WHITE.value, coloursEnabled)
+    addStr(stdscr, 2, "Prompt: ", Colour.WHITE.value, coloursEnabled)
+    editWindow = curses.newwin(editWindowHeight-2, editWindowWidth-2, 4, 0)
+    stdscr.move(0, 0)
+    editWindow.refresh()
+    stdscr.refresh()
+    box = Textbox(editWindow)
+    box.edit(validator)
+    userPrompt = box.gather()
+    stdscr.erase()
+
     userPromptLines = userPrompt.split("\n")
     for line in userPromptLines:
         outputLines.append(line)
+
+    for name in fileNames:
+        outputLines.append(name)
+
+    attachmentPrompt = userPrompt
+    if len(fileNames) > 0:
+        attachmentPrompt += "\nUse the following file(s): \n"
+        for fileName in fileNames:
+            try:
+                with open(fileName, "r", encoding="utf-8") as f:
+                    attachmentPrompt += "<FILE START: " + fileName + ">\n"
+                    attachmentPrompt += f.read()
+                    attachmentPrompt += "<FILE END: " + fileName + ">\n\n"
+            except FileNotFoundError:
+                outputLines.append("FileNotFoundError: " + fileName)
+            except PermissionError:
+                outputLines.append("PermissionError: " + fileName)
+            except Exception as e:
+                outputLines.append("Error: " + str(e))
+
+    prompt = promptTemplate.replace("<USERPROMPT>", attachmentPrompt)
+
+    outputLines.append("")
     modelStartLine = len(outputLines)
-    outputLines.append("")
-    outputLines.append("")
-    modelThinkEndLine = -1
 
     try:
         messageWindowWidth = windowWidth
@@ -167,7 +230,6 @@ def main(stdscr, fileNames, userPrompt, prompt):
                         scrollState +=scrollSpeed
                         rerender = True
                 elif ch != -1 and 0 <= ch <= 255:
-                    addStr(stdscr, 0, "context: " + str(ch), Colour.WHITE.value, coloursEnabled)
                     if ch == curses.KEY_NPAGE:
                         scrollState -=scrollSpeed
                         rerender = True
@@ -183,9 +245,8 @@ def main(stdscr, fileNames, userPrompt, prompt):
             except curses.error:
                 pass
 
-            addStr(stdscr, 0, "project context: " + str(fileNames), Colour.WHITE.value, coloursEnabled)
-            addStr(stdscr, 1, "context size: " + str(tokensPredicted+tokensEvaluated), Colour.WHITE.value, coloursEnabled)
-            renderHorizontalLine(stdscr, 2, coloursEnabled)
+            addStr(stdscr, 0, "context size: " + str(tokensPredicted+tokensEvaluated), Colour.WHITE.value, coloursEnabled)
+            renderHorizontalLine(stdscr, 1, coloursEnabled)
 
             renderAreaHeight = windowHeight - headerHeight - 1
             lineCount = len(outputLines)
@@ -221,40 +282,8 @@ def main(stdscr, fileNames, userPrompt, prompt):
         sys.exit(0)
 
 serverStatus = str(checkServerStatus())
-print(serverStatus)
 
 with open(promptTemplateFilePath, "r") as file:
     promptTemplate = file.read()
 
-patterns = input("Files: ")
-patterns = patterns.split(" ")
-fileNames = []
-if patterns != [""]:
-    for pattern in patterns:
-        fileNames += glob.glob(workingDirectory+"/*"+pattern+"*")
-
-for fileName in fileNames:
-    print(fileName)
-
-userPrompt = input("Prompt: ")
-attachmentPrompt = userPrompt
-
-if len(fileNames) > 0:
-    attachmentPrompt += "\nUse the following file(s): \n"
-
-    for fileName in fileNames:
-        try:
-            with open(fileName, "r", encoding="utf-8") as f:
-                attachmentPrompt += "<FILE START: " + fileName + ">\n"
-                attachmentPrompt += f.read()
-                attachmentPrompt += "<FILE END: " + fileName + ">\n\n"
-        except FileNotFoundError:
-            print("FileNotFoundError")
-        except PermissionError:
-            print("PermissionError")
-        except Exception as e:
-            print(f"Error: {e}")
-
-prompt = promptTemplate.replace("<USERPROMPT>", attachmentPrompt)
-
-curses.wrapper(main, fileNames, userPrompt, prompt)
+curses.wrapper(main, serverStatus)
