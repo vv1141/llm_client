@@ -10,6 +10,7 @@ import json
 import threading
 import queue
 import time
+import datetime
 
 rootPath = "data"
 promptTemplateFilePath = rootPath + "/prompt_template"
@@ -18,6 +19,7 @@ workingDirectory = "."
 baseUrl = "http://localhost:8080"
 completionUrl = baseUrl + "/completion"
 healthUrl = baseUrl + "/health"
+propsUrl = baseUrl + "/props"
 headers = {"Content-Type": "application/json"}
 
 class Colour(Enum):
@@ -36,6 +38,19 @@ def checkServerStatus():
                 pass
     except Exception as e:
         pass
+    return "Offline"
+
+def checkModel():
+    try:
+        with requests.get(propsUrl, headers=headers) as response:
+            response.raise_for_status()
+            try:
+                return str(response.json()["model_path"]), response.json()["default_generation_settings"]["n_ctx"]
+            except json.JSONDecodeError:
+                pass
+    except Exception as e:
+        pass
+    return "-", 0
 
 def streamPost(q, stop_event, payload):
     try:
@@ -76,6 +91,32 @@ def addStr(target, y, string, colour, coloursEnabled):
     else:
         target.addstr(y, 0, string)
 
+def editTextBox(target, serverStatus, modelPath, contextWindow, fileNames, windowWidth, windowHeight, coloursEnabled, promptInput):
+    inputStartLine = 5
+    fileList = ""
+    addStr(target, 0, "Server: " + serverStatus, Colour.WHITE.value, coloursEnabled)
+    addStr(target, 1, "Model: " + modelPath, Colour.WHITE.value, coloursEnabled)
+    addStr(target, 2, "Context Window: " + str(contextWindow), Colour.WHITE.value, coloursEnabled)
+    if promptInput:
+        inputStartLine = 6
+        fileList = formatList(fileNames)
+        addStr(target, 4, "Prompt: ", Colour.WHITE.value, coloursEnabled)
+    addStr(target, 3, "Files: " + fileList, Colour.WHITE.value, coloursEnabled)
+    editWindowWidth = min(100, windowWidth)
+    editWindowHeight = min(100, windowHeight)
+    editWindow = curses.newwin(editWindowHeight-2, editWindowWidth-2, inputStartLine, 0)
+    target.move(0, 0)
+    editWindow.refresh()
+    target.refresh()
+    box = Textbox(editWindow)
+    box.edit(validator)
+    text = box.gather()
+    target.erase()
+    return text
+
+def formatTime(timeInSeconds):
+    return str(datetime.timedelta(seconds=timeInSeconds)).split(".")[0]
+
 def renderHorizontalLine(target, y, coloursEnabled):
     lineString = "─" * curses.COLS
     addStr(target, y, lineString, Colour.WHITE.value, coloursEnabled)
@@ -86,7 +127,7 @@ def stringLineCount(string):
 def lineNumberPadding(lineNumber, lineCount):
     return " " * (len(str(lineCount - 1)) - len(str(lineNumber)))
 
-def main(stdscr, serverStatus):
+def main(stdscr, serverStatus, modelPath, contextWindow):
 
     coloursEnabled = False
     scrollSpeed = 5
@@ -113,16 +154,7 @@ def main(stdscr, serverStatus):
 
     outputLines = []
 
-    addStr(stdscr, 0, "Server: " + serverStatus, Colour.WHITE.value, coloursEnabled)
-    addStr(stdscr, 1, "Files: ", Colour.WHITE.value, coloursEnabled)
-    editWindowWidth = min(100, windowWidth)
-    editWindowHeight = min(100, windowHeight)
-    editWindow = curses.newwin(editWindowHeight-2, editWindowWidth-2, 3, 0)
-    editWindow.refresh()
-    stdscr.refresh()
-    box = Textbox(editWindow)
-    box.edit(validator)
-    patterns = box.gather()
+    patterns = editTextBox(stdscr, serverStatus, modelPath, contextWindow, [], windowWidth, windowHeight, coloursEnabled, False)
     patterns = patterns.split(" ")
     fileNames = []
     if patterns != [""]:
@@ -134,19 +166,7 @@ def main(stdscr, serverStatus):
                     if not os.path.isdir(name):
                         fileNames.append(name)
 
-    stdscr.erase()
-    addStr(stdscr, 0, "Server: " + serverStatus, Colour.WHITE.value, coloursEnabled)
-    addStr(stdscr, 1, "Files: " + formatList(fileNames), Colour.WHITE.value, coloursEnabled)
-    addStr(stdscr, 2, "Prompt: ", Colour.WHITE.value, coloursEnabled)
-    editWindow = curses.newwin(editWindowHeight-2, editWindowWidth-2, 4, 0)
-    stdscr.move(0, 0)
-    editWindow.refresh()
-    stdscr.refresh()
-    box = Textbox(editWindow)
-    box.edit(validator)
-    userPrompt = box.gather()
-    stdscr.erase()
-
+    userPrompt = editTextBox(stdscr, serverStatus, modelPath, contextWindow, fileNames, windowWidth, windowHeight, coloursEnabled, True)
     userPromptLines = userPrompt.split("\n")
     for line in userPromptLines:
         outputLines.append(line)
@@ -172,8 +192,8 @@ def main(stdscr, serverStatus):
 
     prompt = promptTemplate.replace("<USERPROMPT>", attachmentPrompt)
 
-    outputLines.append("")
     modelStartLine = len(outputLines)
+    outputLines.append("")
 
     try:
         messageWindowWidth = windowWidth
@@ -191,13 +211,18 @@ def main(stdscr, serverStatus):
         curses.mousemask(curses.ALL_MOUSE_EVENTS)
         curses.mouseinterval(0)
 
+        requestFinished = False
         payload = {"prompt": prompt, "stream": True}
         q = queue.Queue()
         stop_event = threading.Event()
         t = threading.Thread(target=streamPost, args=(q, stop_event, payload), daemon=True)
         t.start()
+        startTime = time.time()
+        elapsedTime = formatTime(0)
 
         while(True):
+            if not requestFinished:
+                elapsedTime = formatTime(time.time() - startTime)
             curses.update_lines_cols()
             windowHeight, windowWidth = curses.LINES, curses.COLS
             rerender = False
@@ -215,6 +240,7 @@ def main(stdscr, serverStatus):
                     except Exception:
                         pass
                 else:
+                    requestFinished = True
                     t.join(timeout=0)
             except queue.Empty:
                 pass
@@ -245,7 +271,13 @@ def main(stdscr, serverStatus):
             except curses.error:
                 pass
 
-            addStr(stdscr, 0, "context size: " + str(tokensPredicted+tokensEvaluated), Colour.WHITE.value, coloursEnabled)
+            tokensUsed = tokensPredicted+tokensEvaluated
+            contextText = ""
+            if contextWindow > 0:
+                contextText = str(tokensUsed) + "/" + str(contextWindow) + " | " + str(tokensUsed/contextWindow*100).split(".")[0] + "% | " + elapsedTime
+            else:
+                contextText = "Offline"
+            addStr(stdscr, 0, contextText, Colour.WHITE.value, coloursEnabled)
             renderHorizontalLine(stdscr, 1, coloursEnabled)
 
             renderAreaHeight = windowHeight - headerHeight - 1
@@ -282,8 +314,9 @@ def main(stdscr, serverStatus):
         sys.exit(0)
 
 serverStatus = str(checkServerStatus())
+modelPath, contextWindow = checkModel()
 
 with open(promptTemplateFilePath, "r") as file:
     promptTemplate = file.read()
 
-curses.wrapper(main, serverStatus)
+curses.wrapper(main, serverStatus, modelPath, contextWindow)
