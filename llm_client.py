@@ -1,6 +1,7 @@
 import curses
 from curses.textpad import Textbox
 from enum import Enum
+import subprocess
 import sys
 import os
 import math
@@ -127,6 +128,22 @@ def stringLineCount(string):
 def lineNumberPadding(lineNumber, lineCount):
     return " " * (len(str(lineCount - 1)) - len(str(lineNumber)))
 
+def copyToClipboard(string):
+    try:
+        subprocess.run(["xclip", "-selection", "clipboard"], input=string.encode("utf8"))
+    except:
+        pass
+
+def listToString(outputLines, selectStartLine, selectEndLine):
+    string = ""
+    if selectStartLine < selectEndLine:
+        for i in range(selectStartLine, selectEndLine + 1):
+            string += outputLines[i] + "\n"
+    else:
+        for i in range(selectEndLine, selectStartLine + 1):
+            string += outputLines[i] + "\n"
+    return string
+
 def main(stdscr, serverStatus, modelPath, contextWindow):
 
     coloursEnabled = False
@@ -135,12 +152,17 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
 
     scrollState = 0
     cursorPosition = 0
+    selectMode = False
+    selectStartLine = 0
+    selectEndLine = 0
     tokensPredicted = 0
     tokensEvaluated = 0
     modelThinkEndLine = -1
 
     stdscr = curses.initscr()
     stdscr.clear()
+    stdscr.keypad(True)
+    stdscr.idlok(True)
     windowHeight, windowWidth = curses.LINES, curses.COLS
 
     if curses.has_colors() and curses.COLORS >= 244:
@@ -202,10 +224,7 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
         stdscr.move(0, 0)
         messageWindow.refresh()
         stdscr.refresh()
-        box = Textbox(messageWindow)
 
-        messageWindow.keypad(True)
-        messageWindow.idlok(True)
         curses.curs_set(0)
         stdscr.nodelay(True)
         curses.mousemask(curses.ALL_MOUSE_EVENTS)
@@ -247,27 +266,76 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
 
             ch = stdscr.getch()
             try:
+                down = False
+                up = False
+                scrollDown = False
+                scrollUp = False
+                scrollFirst = False
+                scrollLast = False
                 if ch == curses.KEY_MOUSE:
                     _, _, _, _, bstate = curses.getmouse()
-                    if bstate & curses.BUTTON4_PRESSED:
-                        scrollState -= scrollSpeed
-                        rerender = True
-                    elif bstate & curses.BUTTON5_PRESSED:
-                        scrollState +=scrollSpeed
-                        rerender = True
-                elif ch != -1 and 0 <= ch <= 255:
-                    if ch == curses.KEY_NPAGE:
-                        scrollState -=scrollSpeed
-                        rerender = True
-                    elif ch == curses.KEY_PPAGE:
-                        scrollState +=scrollSpeed
-                        rerender = True
-                    elif ch == curses.KEY_DOWN or ch == 106:
+                    if bstate & curses.BUTTON5_PRESSED:
+                        scrollDown = True
+                    elif bstate & curses.BUTTON4_PRESSED:
+                        scrollUp = True
+                elif ch == curses.KEY_NPAGE or ch == 4:
+                    scrollDown = True
+                elif ch == curses.KEY_PPAGE or ch == 21:
+                    scrollUp = True
+                elif ch == curses.KEY_DOWN or ch == 106:
+                    down = True
+                elif ch == curses.KEY_UP or ch == 107:
+                    up = True
+                elif ch == 118:
+                    selectMode = not selectMode
+                    if selectMode:
+                        selectStartLine = cursorPosition
+                        selectEndLine = cursorPosition
+                elif ch == 121:
+                    if selectMode:
+                        copyToClipboard(listToString(outputLines, selectStartLine, selectEndLine))
+                        selectMode = False
+                    else:
+                        copyToClipboard(outputLines[cursorPosition])
+                elif ch == 103:
+                    scrollFirst = True
+                elif ch == 71:
+                    scrollLast = True
+                elif ch == 27:
+                    selectMode = False
+
+                if down:
+                    if cursorPosition < len(outputLines) - 1:
                         cursorPosition += 1
+                        selectEndLine = cursorPosition
                         rerender = True
-                    elif ch == curses.KEY_UP or ch == 107:
+                if up:
+                    if cursorPosition > 0:
                         cursorPosition -= 1
+                        selectEndLine = cursorPosition
                         rerender = True
+                if scrollDown:
+                    scrollState +=scrollSpeed
+                    cursorPosition += scrollSpeed
+                    cursorPosition = min(cursorPosition, len(outputLines) - 1)
+                    selectEndLine = cursorPosition
+                    rerender = True
+                if scrollUp:
+                    scrollState -=scrollSpeed
+                    cursorPosition -= scrollSpeed
+                    cursorPosition = max(cursorPosition, 0)
+                    selectEndLine = cursorPosition
+                    rerender = True
+                if scrollFirst:
+                    cursorPosition = 0
+                    scrollState = 0
+                    selectEndLine = cursorPosition
+                    rerender = True
+                if scrollLast:
+                    cursorPosition = len(outputLines) - 1
+                    scrollState = cursorPosition
+                    selectEndLine = cursorPosition
+                    rerender = True
             except curses.error:
                 pass
 
@@ -283,8 +351,13 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
             renderAreaHeight = windowHeight - headerHeight - 1
             lineCount = len(outputLines)
 
-            scrollState = min(scrollState, lineCount)
-            scrollState = max(0, scrollState)
+            scrollState = min(scrollState, cursorPosition)
+            scrollState = max(scrollState, cursorPosition - renderAreaHeight)
+            if lineCount - renderAreaHeight > 0:
+                scrollState = min(scrollState, lineCount - renderAreaHeight)
+            else:
+                scrollState = 0
+            scrollState = max(scrollState, 0)
 
             y = 0
             for i in range(lineCount):
@@ -299,6 +372,13 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
                         colour = Colour.WHITE.value
                     if i == cursorPosition:
                         colour = Colour.HIGHLIGHT.value
+                    if selectMode:
+                        if selectStartLine < selectEndLine:
+                            if i >= selectStartLine and i <= selectEndLine:
+                                colour = Colour.HIGHLIGHT.value
+                        else:
+                            if i >= selectEndLine and i <= selectStartLine:
+                                colour = Colour.HIGHLIGHT.value
                     addStr(messageWindow, y, str(i) + lineNumberPadding(i, lineCount) + " " + readLine, colour, coloursEnabled)
                     y += stringLineCount(readLine)
 
