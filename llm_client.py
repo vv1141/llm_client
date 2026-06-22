@@ -118,6 +118,17 @@ def editTextBox(target, serverStatus, modelPath, contextWindow, fileNames, windo
 def formatTime(timeInSeconds):
     return str(datetime.timedelta(seconds=timeInSeconds)).split(".")[0]
 
+def getSpinnerString():
+    dt = datetime.datetime.now()
+    ms = dt.microsecond / 1000 % 1000
+    if ms < 250:
+        return "."
+    if ms < 500:
+        return ".."
+    if ms < 750:
+        return "..."
+    return "...."
+
 def renderHorizontalLine(target, y, coloursEnabled):
     lineString = "─" * curses.COLS
     addStr(target, y, lineString, Colour.WHITE.value, coloursEnabled)
@@ -230,6 +241,7 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
         curses.mousemask(curses.ALL_MOUSE_EVENTS)
         curses.mouseinterval(0)
 
+        modelCompletionStarted = False
         requestFinished = False
         payload = {"prompt": prompt, "stream": True}
         q = queue.Queue()
@@ -255,6 +267,7 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
                         tokensPredicted = data["tokens_predicted"]
                         tokensEvaluated = data["tokens_evaluated"]
 
+                        modelCompletionStarted = True
                         rerender = True
                     except Exception:
                         pass
@@ -359,6 +372,10 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
                 scrollState = 0
             scrollState = max(scrollState, 0)
 
+            if not modelCompletionStarted:
+                rerender = True
+                outputLines[modelStartLine] = getSpinnerString()
+
             y = 0
             for i in range(lineCount):
                 if modelThinkEndLine == -1 and "</think>" in outputLines[i]:
@@ -372,6 +389,8 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
                         colour = Colour.WHITE.value
                     if i == cursorPosition:
                         colour = Colour.HIGHLIGHT.value
+                    if i == modelStartLine and not modelCompletionStarted:
+                        colour = Colour.GREEN.value
                     if selectMode:
                         if selectStartLine < selectEndLine:
                             if i >= selectStartLine and i <= selectEndLine:
