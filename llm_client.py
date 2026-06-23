@@ -2,6 +2,7 @@ import curses
 from curses.textpad import Textbox
 from enum import Enum
 import subprocess
+import getopt
 import sys
 import os
 import math
@@ -15,6 +16,12 @@ import datetime
 
 rootPath = "data"
 promptTemplateFilePath = rootPath + "/prompt_template"
+continuationPromptTemplateFilePath = rootPath + "/continuation_prompt_template"
+promptFilePath = rootPath + "/prompt"
+saveFilePath = rootPath + "/save"
+filesFilePath = rootPath + "/files"
+completionFilePath = rootPath + "/completion"
+
 workingDirectory = "."
 
 baseUrl = "http://localhost:8080"
@@ -79,6 +86,9 @@ def validator(ch):
     if ch == ord("\n"):
         return curses.ascii.BEL
     return ch
+
+def completionFinished(continuationPromptTemplate, prompt):
+    return (continuationPromptTemplate in prompt)
 
 def formatList(value):
     string = ""
@@ -155,7 +165,19 @@ def listToString(outputLines, selectStartLine, selectEndLine):
             string += outputLines[i] + "\n"
     return string
 
-def main(stdscr, serverStatus, modelPath, contextWindow):
+def readFile(path):
+    try:
+        with open(path, "r") as file:
+            return file.read(), True
+    except FileNotFoundError:
+        return "FileNotFoundError: " + path, False
+    except PermissionError:
+        return "PermissionError: " + path, False
+    except Exception as e:
+        return "Error: " + str(e), False
+    return "", False
+
+def main(stdscr, continueMode):
 
     coloursEnabled = False
     scrollSpeed = 5
@@ -185,48 +207,100 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
         curses.init_pair(Colour.GREEN.value, 2, -1)
         curses.init_pair(Colour.HIGHLIGHT.value, 0, 2)
 
+    serverStatus = str(checkServerStatus())
+    modelPath, contextWindow = checkModel()
+
     outputLines = []
+    userPrompt = ""
+    prompt = ""
 
-    patterns = editTextBox(stdscr, serverStatus, modelPath, contextWindow, [], windowWidth, windowHeight, coloursEnabled, False)
-    patterns = patterns.split(" ")
+    promptTemplate = "<USERPROMPT>"
+    result, success = readFile(promptTemplateFilePath)
+    if success:
+        promptTemplate = result
+    else:
+        outputLines.append(result)
+    continuationPromptTemplate = "<USERPROMPT>"
+    result, success = readFile(continuationPromptTemplateFilePath)
+    if success:
+        continuationPromptTemplate = result
+    else:
+        outputLines.append(result)
+
+
     fileNames = []
-    if patterns != [""]:
-        for pattern in patterns:
-            pattern = pattern.strip()
-            if pattern != "":
-                globbedNames = glob.glob(workingDirectory + "/" + pattern)
-                for name in globbedNames:
-                    if not os.path.isdir(name):
-                        fileNames.append(name)
+    modelStartLine = 0
+    if continueMode:
+        result, success = readFile(promptFilePath)
+        if success:
+            userPrompt = result
+        else:
+            outputLines.append(result)
+        result, success = readFile(saveFilePath)
+        if success:
+            modelStartLine = int(result)
+        else:
+            outputLines.append(result)
+        result, success = readFile(filesFilePath)
+        if success:
+            fileNames = json.loads(str(result).replace('\'', '"'))
+        else:
+            outputLines.append(result)
+        result, success = readFile(completionFilePath)
+        if success:
+            prompt = result
+        else:
+            outputLines.append(result)
+    else:
+        patterns = editTextBox(stdscr, serverStatus, modelPath, contextWindow, [], windowWidth, windowHeight, coloursEnabled, False)
+        patterns = patterns.split(" ")
+        if patterns != [""]:
+            for pattern in patterns:
+                pattern = pattern.strip()
+                if pattern != "":
+                    globbedNames = glob.glob(workingDirectory + "/" + pattern)
+                    for name in globbedNames:
+                        if not os.path.isdir(name):
+                            fileNames.append(name)
 
-    userPrompt = editTextBox(stdscr, serverStatus, modelPath, contextWindow, fileNames, windowWidth, windowHeight, coloursEnabled, True)
+    if not continueMode:
+        userPrompt = editTextBox(stdscr, serverStatus, modelPath, contextWindow, fileNames, windowWidth, windowHeight, coloursEnabled, True)
+        attachmentPrompt = userPrompt
+        if len(fileNames) > 0:
+            attachmentPrompt += "\nUse the following file(s): \n"
+            for fileName in fileNames:
+                try:
+                    with open(fileName, "r", encoding="utf-8") as file:
+                        attachmentPrompt += "<FILE START: " + fileName + ">\n"
+                        attachmentPrompt += file.read()
+                        attachmentPrompt += "<FILE END: " + fileName + ">\n\n"
+                except FileNotFoundError:
+                    outputLines.append("FileNotFoundError: " + fileName)
+                except PermissionError:
+                    outputLines.append("PermissionError: " + fileName)
+                except Exception as e:
+                    outputLines.append("Error: " + str(e))
+        prompt = promptTemplate.replace("<USERPROMPT>", attachmentPrompt)
+    elif completionFinished(continuationPromptTemplate, prompt):
+        userPrompt = editTextBox(stdscr, serverStatus, modelPath, contextWindow, fileNames, windowWidth, windowHeight, coloursEnabled, True)
+        prompt = prompt.replace("<USERPROMPT>", userPrompt)
+
     userPromptLines = userPrompt.split("\n")
     for line in userPromptLines:
         outputLines.append(line)
-
     for name in fileNames:
-        outputLines.append(name)
+        if continueMode:
+            outputLines.insert(modelStartLine - len(fileNames) - 1, name)
+        else:
+            outputLines.append(name)
 
-    attachmentPrompt = userPrompt
-    if len(fileNames) > 0:
-        attachmentPrompt += "\nUse the following file(s): \n"
-        for fileName in fileNames:
-            try:
-                with open(fileName, "r", encoding="utf-8") as f:
-                    attachmentPrompt += "<FILE START: " + fileName + ">\n"
-                    attachmentPrompt += f.read()
-                    attachmentPrompt += "<FILE END: " + fileName + ">\n\n"
-            except FileNotFoundError:
-                outputLines.append("FileNotFoundError: " + fileName)
-            except PermissionError:
-                outputLines.append("PermissionError: " + fileName)
-            except Exception as e:
-                outputLines.append("Error: " + str(e))
+    if not continueMode:
+        outputLines.append("")
+        modelStartLine = len(outputLines) - 1
+    else:
+        outputLines.insert(modelStartLine - len(fileNames) - 1, "")
 
-    prompt = promptTemplate.replace("<USERPROMPT>", attachmentPrompt)
-
-    modelStartLine = len(outputLines)
-    outputLines.append("")
+    requestFinished = False
 
     try:
         messageWindowWidth = windowWidth
@@ -242,7 +316,6 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
         curses.mouseinterval(0)
 
         modelCompletionStarted = False
-        requestFinished = False
         payload = {"prompt": prompt, "stream": True}
         q = queue.Queue()
         stop_event = threading.Event()
@@ -261,7 +334,10 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
                 data = q.get(block = False)
                 if data != None:
                     try:
-                        outputLines[-1] += data["content"]
+                        dataContent = data["content"]
+                        userPrompt += dataContent
+                        prompt += dataContent
+                        outputLines[-1] += dataContent
                         if "\n" in data["content"]:
                             outputLines.append("")
                         tokensPredicted = data["tokens_predicted"]
@@ -360,6 +436,9 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
                 contextText = "Offline"
             addStr(stdscr, 0, contextText, Colour.WHITE.value, coloursEnabled)
             renderHorizontalLine(stdscr, 1, coloursEnabled)
+            if not modelCompletionStarted:
+                addStr(stdscr, 2, getSpinnerString(), Colour.WHITE.value, coloursEnabled)
+                rerender = True
 
             renderAreaHeight = windowHeight - headerHeight - 1
             lineCount = len(outputLines)
@@ -371,10 +450,6 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
             else:
                 scrollState = 0
             scrollState = max(scrollState, 0)
-
-            if not modelCompletionStarted:
-                rerender = True
-                outputLines[modelStartLine] = getSpinnerString()
 
             y = 0
             for i in range(lineCount):
@@ -389,8 +464,6 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
                         colour = Colour.WHITE.value
                     if i == cursorPosition:
                         colour = Colour.HIGHLIGHT.value
-                    if i == modelStartLine and not modelCompletionStarted:
-                        colour = Colour.GREEN.value
                     if selectMode:
                         if selectStartLine < selectEndLine:
                             if i >= selectStartLine and i <= selectEndLine:
@@ -410,12 +483,43 @@ def main(stdscr, serverStatus, modelPath, contextWindow):
 
     except KeyboardInterrupt:
         t.join(timeout=0)
+        try:
+            with open(promptFilePath, "w") as file:
+                file.write(userPrompt)
+        except:
+            pass
+        try:
+            with open(saveFilePath, "w") as file:
+                file.write(str(modelStartLine))
+        except:
+            pass
+        try:
+            with open(filesFilePath, "w") as file:
+                file.write(str(fileNames))
+        except:
+            pass
+        try:
+            with open(completionFilePath, "w") as file:
+                file.write(prompt)
+                if requestFinished:
+                    file.write(continuationPromptTemplate)
+        except:
+            pass
         sys.exit(0)
 
-serverStatus = str(checkServerStatus())
-modelPath, contextWindow = checkModel()
+continueMode = False
+args = sys.argv[1:]
+options = "hc"
+long_options = ["help", "continue"]
 
-with open(promptTemplateFilePath, "r") as file:
-    promptTemplate = file.read()
+try:
+    arguments, values = getopt.getopt(args, options, long_options)
+    for currentArg, currentVal in arguments:
+        if currentArg in ("-h", "--help"):
+            print("-c --continue Continue a previously unfinished completion or start a new user turn if finished")
+        elif currentArg in ("-c", "--continue"):
+            continueMode = True
+except getopt.error as err:
+    print(str(err))
 
-curses.wrapper(main, serverStatus, modelPath, contextWindow)
+curses.wrapper(main, continueMode)
