@@ -323,10 +323,12 @@ def main(stdscr, continueMode):
         t.start()
         startTime = time.time()
         elapsedTime = formatTime(0)
+        completionTime = formatTime(0)
 
         while(True):
             if not requestFinished:
-                elapsedTime = formatTime(time.time() - startTime)
+                completionTime = formatTime(time.time() - startTime)
+            elapsedTime = formatTime(time.time() - startTime)
             curses.update_lines_cols()
             windowHeight, windowWidth = curses.LINES, curses.COLS
             rerender = False
@@ -431,7 +433,11 @@ def main(stdscr, continueMode):
             tokensUsed = tokensPredicted+tokensEvaluated
             contextText = ""
             if contextWindow > 0:
-                contextText = str(tokensUsed) + "/" + str(contextWindow) + " | " + str(tokensUsed/contextWindow*100).split(".")[0] + "% | " + elapsedTime
+                contextText = str(tokensUsed) + "/" + str(contextWindow) + " | " + str(tokensUsed/contextWindow*100).split(".")[0] + "% | "
+                if requestFinished:
+                    contextText += "[" + completionTime + "] " + elapsedTime
+                else:
+                    contextText += elapsedTime
             else:
                 contextText = "Offline"
             addStr(stdscr, 0, contextText, Colour.WHITE.value, coloursEnabled)
