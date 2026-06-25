@@ -83,7 +83,7 @@ def streamPost(q, stop_event, payload):
         q.put(None)
 
 def validator(ch):
-    if ch == ord("\n"):
+    if ch == 7:
         return curses.ascii.BEL
     return ch
 
