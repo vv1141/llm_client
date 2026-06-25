@@ -8,3 +8,5 @@ LLM Client is a text-based user interface for interfacing with LLM servers. Curr
 * adding files to context using pattern matching
 * streaming the LLM output response at real time
 * displaying context size
+* navigation and copying a selection
+* context saving
