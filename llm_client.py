@@ -97,10 +97,13 @@ def formatList(value):
     return string
 
 def addStr(target, y, string, colour, coloursEnabled):
-    if coloursEnabled:
-        target.addstr(y, 0, string, curses.color_pair(colour))
-    else:
-        target.addstr(y, 0, string)
+    try:
+        if coloursEnabled:
+            target.addstr(y, 0, string, curses.color_pair(colour))
+        else:
+            target.addstr(y, 0, string)
+    except:
+        pass
 
 def editTextBox(target, serverStatus, modelPath, contextWindow, fileNames, windowWidth, windowHeight, coloursEnabled, promptInput):
     inputStartLine = 5
